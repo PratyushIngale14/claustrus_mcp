@@ -7,15 +7,16 @@ rationale against provided source documents, cites what is grounded,
 flags what is not, and logs the full audit trail in an EU AI Act
 Article 12 compatible format.
 
-> **Note on "MCP" in the name:** despite the repo name, this is a plain
-> REST API, not a server that speaks the actual Model Context Protocol
-> (JSON-RPC `initialize` / `tools/list` / `tools/call`). The
-> `/.well-known/mcp.json` route is just a descriptive manifest, not a
-> real MCP transport. If you want this reachable from Claude Code /
-> Claude Desktop's native `mcpServers` config, you'd need to wrap these
-> endpoints with the official `mcp` Python SDK (stdio or SSE transport).
-> As shipped, integrate it the way you'd integrate any HTTP API — see
-> "Using it from your own tool" below.
+> **Note on "MCP" in the name:** there are two entry points into the
+> same grounding engine here. `server.py` is a plain FastAPI REST API —
+> the `/.well-known/mcp.json` route on it is just a descriptive
+> manifest, not a real MCP transport, and pointing Claude Code's
+> `mcpServers` config at it directly won't work. `mcp_server.py` is a
+> separate, real MCP server built on the official `mcp` Python SDK,
+> speaking actual MCP JSON-RPC (`initialize` / `tools/list` /
+> `tools/call`) over stdio — that one *is* natively compatible with
+> Claude Code / Claude Desktop. See "Using as a native MCP server"
+> below for that, or "Using it from your own tool" for the REST API.
 
 ---
 
@@ -64,6 +65,43 @@ an Anthropic key from its own environment.
 docker build -t claustrus .
 docker run -p 8000:8000 -e CLAUSTRUS_API_KEY=your-key claustrus
 ```
+
+---
+
+## Using as a native MCP server (Claude Code / Claude Desktop)
+
+`mcp_server.py` is a separate stdio-transport server, built on the
+official `mcp` Python SDK, that exposes the same grounding engine as
+three MCP tools: `ground`, `ground_healthcare`, and `download_logs`.
+It requires **Python 3.10+** (the `mcp` package doesn't support 3.9).
+
+```bash
+pip install mcp
+```
+
+Then add this to your Claude Code / Claude Desktop MCP config
+(`~/.claude.json` for Claude Code):
+
+```json
+{
+  "mcpServers": {
+    "claustrus": {
+      "command": "python3",
+      "args": ["/absolute/path/to/claustrus_mcp/mcp_server.py"]
+    }
+  }
+}
+```
+
+Replace `/absolute/path/to/claustrus_mcp` with wherever you cloned
+this repo. Restart Claude Code / Claude Desktop after editing the
+config, and the three tools above become available directly — no
+running server, no API key header, no network hop.
+
+The REST API on Railway and the stdio MCP server are two entry points
+to the same grounding engine. Use the REST API for HTTP clients, curl,
+and remote access. Use the stdio server for native Claude Code /
+Claude Desktop integration.
 
 ---
 

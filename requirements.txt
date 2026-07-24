@@ -3,3 +3,4 @@ uvicorn>=0.29
 pydantic>=2.6
 anthropic>=0.25
 python-dotenv>=1.0
+mcp>=1.0.0
