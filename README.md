@@ -1,10 +1,21 @@
-# Claustrus MCP Server
+# Claustrus
 
 **Universal grounding and citation verification for AI agent outputs.**
 
-A hosted MCP server that checks every sentence of an AI-generated rationale
-against provided source documents, cites what is grounded, flags what is not,
-and logs the full audit trail in EU AI Act Article 12 compatible format.
+A small FastAPI service that checks every sentence of an AI-generated
+rationale against provided source documents, cites what is grounded,
+flags what is not, and logs the full audit trail in an EU AI Act
+Article 12 compatible format.
+
+> **Note on "MCP" in the name:** despite the repo name, this is a plain
+> REST API, not a server that speaks the actual Model Context Protocol
+> (JSON-RPC `initialize` / `tools/list` / `tools/call`). The
+> `/.well-known/mcp.json` route is just a descriptive manifest, not a
+> real MCP transport. If you want this reachable from Claude Code /
+> Claude Desktop's native `mcpServers` config, you'd need to wrap these
+> endpoints with the official `mcp` Python SDK (stdio or SSE transport).
+> As shipped, integrate it the way you'd integrate any HTTP API — see
+> "Using it from your own tool" below.
 
 ---
 
@@ -18,49 +29,69 @@ and logs the full audit trail in EU AI Act Article 12 compatible format.
 | `/logs/download?format=json` | GET | Download full audit log as JSON array |
 | `/logs/summary` | GET | Summary stats of all logged calls |
 | `/health` | GET | Health check |
-| `/.well-known/mcp.json` | GET | MCP manifest for client discovery |
+| `/.well-known/mcp.json` | GET | Descriptive manifest listing the two tools above |
 
 ---
 
 ## Run locally
 
 ```bash
-git clone https://github.com/PratyushIngale14/claustrus-mcp.git
-cd claustrus-mcp
+git clone https://github.com/PratyushIngale14/claustrus_mcp.git
+cd claustrus_mcp
 pip install -r requirements.txt
-cp .env.example .env   # fill in values
 uvicorn server:app --reload
 ```
 
 Server starts at http://localhost:8000
 
-Interactive API docs at http://localhost:8000/docs
+Interactive API docs (Swagger UI) at http://localhost:8000/docs
+
+### Environment variables (all optional)
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `CLAUSTRUS_API_KEY` | If set, every request must send a matching `x-api-key` header, or it gets a 401. If unset, the API is open. | none |
+| `CLAUSTRUS_LOG_PATH` | Where the NDJSON audit log is written. | `/tmp/claustrus_audit.ndjson` |
+
+There is no server-side Anthropic API key. The optional semantic pass
+(see "Token efficiency" below) is powered by an `anthropic_api_key`
+field passed in the *request body* per call — the server never reads
+an Anthropic key from its own environment.
+
+### Run with Docker
+
+```bash
+docker build -t claustrus .
+docker run -p 8000:8000 -e CLAUSTRUS_API_KEY=your-key claustrus
+```
 
 ---
 
-## Connect from Claude Code
+## Using it from your own tool
 
-Add to your Claude Code MCP config:
+This is a plain HTTP API, so any tool, script, or agent that can make
+an HTTP request can use it — curl, Python `requests`, a Claude Code
+Bash tool call, a LangChain/OpenAI custom tool definition, a Zapier
+webhook, etc. There's no client library or special SDK required.
 
-```json
-{
-  "mcpServers": {
-    "claustrus": {
-      "url": "https://your-railway-url.railway.app",
-      "headers": {
-        "x-api-key": "your-key"
-      }
-    }
-  }
-}
+Minimal shape:
+
+```bash
+curl -X POST http://localhost:8000/ground \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-key" \
+  -d '{"rationale": "...", "sources": {"DOC-ID": "..."}}'
 ```
+
+Only send the `x-api-key` header if you set `CLAUSTRUS_API_KEY` on the
+server; otherwise omit it.
 
 ---
 
 ## Example — core grounding call
 
 ```bash
-curl -X POST https://your-railway-url.railway.app/ground \
+curl -X POST http://localhost:8000/ground \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-key" \
   -d '{
@@ -85,7 +116,7 @@ Response includes:
 ## Example — healthcare compliance call
 
 ```bash
-curl -X POST https://your-railway-url.railway.app/ground/healthcare \
+curl -X POST http://localhost:8000/ground/healthcare \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-key" \
   -d '{
@@ -102,8 +133,10 @@ curl -X POST https://your-railway-url.railway.app/ground/healthcare \
   }'
 ```
 
-Returns grounding result plus eight compliance rule results (R1-R8),
-each with the exact CMS regulatory source that the rule is derived from.
+`decision` and `billed_amount` are required fields for this endpoint;
+everything else is optional. Returns the grounding result plus eight
+compliance rule results (R1-R8), each with the exact CMS regulatory
+source that the rule is derived from.
 
 ---
 
@@ -111,11 +144,11 @@ each with the exact CMS regulatory source that the rule is derived from.
 
 ```bash
 # NDJSON — one line per call, best for log tools (grep, jq, Splunk)
-curl https://your-url/logs/download?format=ndjson \
+curl http://localhost:8000/logs/download?format=ndjson \
   -H "x-api-key: your-key" -o audit.ndjson
 
 # JSON array — best for manual review or spreadsheet import
-curl https://your-url/logs/download?format=json \
+curl http://localhost:8000/logs/download?format=json \
   -H "x-api-key: your-key" -o audit.json
 ```
 
@@ -141,19 +174,24 @@ Every call produces an `eu_ai_act_fields` block:
 }
 ```
 
-This is logged to a persistent NDJSON file and downloadable on demand.
-The combination of input hash, system ID, score, status, and timestamp
-provides the evidence trail Article 12 requires for high-risk AI systems.
+This is logged to the NDJSON file at `CLAUSTRUS_LOG_PATH` and
+downloadable on demand via `/logs/download`. The combination of input
+hash, system ID, score, status, and timestamp provides the evidence
+trail Article 12 requires for high-risk AI systems.
 
 ---
 
-## Deploy to Railway (recommended, $5/month hobby tier)
+## Deploy to Railway (or any container host)
 
 1. Push this repo to GitHub
 2. Go to railway.app, create new project from GitHub repo
-3. Set environment variables: CLAUSTRUS_API_KEY, ANTHROPIC_API_KEY
-4. Deploy — Railway detects the Dockerfile automatically
-5. Your MCP server is live at the Railway-provided URL
+3. Optionally set `CLAUSTRUS_API_KEY` to lock down the API
+4. Deploy — Railway detects the `Dockerfile` automatically
+5. Your API is live at the Railway-provided URL
+
+There's no other required environment variable — the Anthropic key,
+if you want the optional semantic pass, is supplied per-request by
+whatever client calls the API, not configured server-side.
 
 ---
 
@@ -165,7 +203,7 @@ Claude is only called when:
 - At least one sentence is flagged as unsupported
 
 In that case, Claude is called once per flagged sentence using
-claude-haiku (fastest, cheapest model) with an 80-token max response.
+`claude-haiku-4-5` with an 80-token max response.
 
 Typical call costs:
 - No API key: 0 tokens, under 1ms latency
